@@ -1,0 +1,130 @@
+name: OpenAI Status Monitor (Gist-based State)
+
+# Run every 5 minutes
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Create state manager for Gist
+        run: |
+          # Create a custom Gist state manager
+          cat > src/openai_status_monitor/state_managers/gist_state_manager.py << 'EOF'
+          """
+          gist_state_manager.py
+          
+          GitHub Gist-based state management.
+          """
+          
+          import json
+          import logging
+          import os
+          import requests
+          from .base_state_manager import BaseStateManager
+          
+          logger = logging.getLogger(__name__)
+          
+          
+          class GistStateManager(BaseStateManager):
+              """Manages state using a GitHub Gist."""
+              
+              def __init__(self, gist_id, token):
+                  self.gist_id = gist_id
+                  self.token = token
+                  self.api_url = f"https://api.github.com/gists/{gist_id}"
+                  self.headers = {
+                      "Authorization": f"token {token}",
+                      "Accept": "application/vnd.github.v3+json"
+                  }
+                  logger.debug(f"GistStateManager initialized for gist: {gist_id}")
+              
+              def load_state(self):
+                  try:
+                      response = requests.get(self.api_url, headers=self.headers, timeout=10)
+                      response.raise_for_status()
+                      gist_data = response.json()
+                      
+                      # Get the state.json file from gist
+                      files = gist_data.get('files', {})
+                      if 'state.json' in files:
+                          content = files['state.json']['content']
+                          return json.loads(content)
+                      else:
+                          logger.info("state.json not found in gist. Starting with empty state.")
+                          return {}
+                  except Exception as e:
+                      logger.error(f"Failed to load state from gist: {e}")
+                      return {}
+              
+              def save_state(self, state):
+                  try:
+                      payload = {
+                          "files": {
+                              "state.json": {
+                                  "content": json.dumps(state, indent=2)
+                              }
+                          }
+                      }
+                      response = requests.patch(self.api_url, headers=self.headers, json=payload, timeout=10)
+                      response.raise_for_status()
+                      logger.debug(f"State saved to gist: {self.gist_id}")
+                  except Exception as e:
+                      logger.error(f"Failed to save state to gist: {e}")
+                      raise
+          EOF
+      
+      - name: Run status monitor with Gist state
+        env:
+          FEED_URL: https://status.openai.com/history.atom
+          STATE_BACKEND: gist
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          NOTIFIERS: console,slack
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          LOG_LEVEL: INFO
+        run: |
+          # Modify __main__.py to support gist backend
+          python << 'PYTHON_EOF'
+          import sys
+          import os
+          from src.openai_status_monitor import config
+          from src.openai_status_monitor.monitor import StatusMonitor
+          from src.openai_status_monitor.state_managers.gist_state_manager import GistStateManager
+          from src.openai_status_monitor.notifiers.console_notifier import ConsoleNotifier
+          from src.openai_status_monitor.notifiers.slack_notifier import SlackNotifier
+          import logging
+          
+          logger = logging.getLogger(__name__)
+          
+          # Create state manager
+          gist_id = os.environ.get('GIST_ID')
+          gist_token = os.environ.get('GIST_TOKEN')
+          state_manager = GistStateManager(gist_id, gist_token)
+          
+          # Create notifiers
+          notifiers = [ConsoleNotifier()]
+          if os.environ.get('SLACK_WEBHOOK_URL'):
+              notifiers.append(SlackNotifier(os.environ.get('SLACK_WEBHOOK_URL')))
+          
+          # Run monitor
+          monitor = StatusMonitor(state_manager, notifiers)
+          monitor.check_for_updates()
+          PYTHON_EOF
