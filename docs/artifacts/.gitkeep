@@ -1,0 +1,16 @@
+# Artifacts Directory
+
+This directory contains screenshots and visual documentation of the OpenAI Status Monitor in action.
+
+## Contents
+
+- Workflow execution screenshots
+- Slack notification examples
+- State management visualizations
+- Performance metrics
+
+Place your screenshots here following the naming convention:
+- `workflow_success.png` - Successful GitHub Actions run
+- `slack_notification.png` - Example Slack notification
+- `state_json.png` - State file example
+- `logs_example.png` - Log output example
