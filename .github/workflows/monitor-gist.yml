@@ -24,9 +24,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Create state manager for Gist
+      - name: Create Gist state manager
         run: |
-          # Create a custom Gist state manager
           cat > src/openai_status_monitor/state_managers/gist_state_manager.py << 'EOF'
           """
           gist_state_manager.py
@@ -66,20 +65,35 @@ jobs:
                       files = gist_data.get('files', {})
                       if 'state.json' in files:
                           content = files['state.json']['content']
-                          return json.loads(content)
+                          state = json.loads(content)
+                          # Ensure we return proper structure even if content is empty/minimal
+                          if not state:
+                              return {"processed_incident_ids": []}
+                          # Add defaults for missing keys to prevent null values
+                          return {
+                              "etag": state.get("etag"),
+                              "last_modified": state.get("last_modified"),
+                              "processed_incident_ids": state.get("processed_incident_ids", [])
+                          }
                       else:
                           logger.info("state.json not found in gist. Starting with empty state.")
-                          return {}
+                          return {"processed_incident_ids": []}
                   except Exception as e:
                       logger.error(f"Failed to load state from gist: {e}")
-                      return {}
+                      return {"processed_incident_ids": []}
               
               def save_state(self, state):
                   try:
+                      # Ensure all fields are present (not null) before saving
+                      complete_state = {
+                          "etag": state.get("etag"),
+                          "last_modified": state.get("last_modified"),
+                          "processed_incident_ids": state.get("processed_incident_ids", [])
+                      }
                       payload = {
                           "files": {
                               "state.json": {
-                                  "content": json.dumps(state, indent=2)
+                                  "content": json.dumps(complete_state, indent=2)
                               }
                           }
                       }
@@ -91,7 +105,7 @@ jobs:
                       raise
           EOF
       
-      - name: Run status monitor with Gist state
+      - name: Run status monitor
         env:
           FEED_URL: https://status.openai.com/history.atom
           STATE_BACKEND: gist
@@ -101,7 +115,6 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           LOG_LEVEL: INFO
         run: |
-          # Modify __main__.py to support gist backend
           python << 'PYTHON_EOF'
           import sys
           import os
